@@ -1,13 +1,13 @@
 Source: ros-fuerte-object-recognition-transparent-objects
 Section: misc
 Priority: extra
-Maintainer: Vincent Rabaud <vrabaud@willowgarage.com>
-Build-Depends: debhelper (>= 7.0.50~), ros-fuerte-catkin,ros-fuerte-object-recognition-core,ros-fuerte-ecto
+Maintainer: Vincent Rabaud <vrabaud@willowgarage.com>, Ilya Lysenkov <ilya.lysenkov@itseez.com>
+Build-Depends: debhelper (>= 7.0.50~), ros-fuerte-catkin,ros-fuerte-pcl,ros-fuerte-object-recognition-core,ros-fuerte-ecto
 Homepage: http://ecto.willowgarage.com
 Standards-Version: 3.9.2
 
 Package: ros-fuerte-object-recognition-transparent-objects
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, ros-fuerte-catkin,ros-fuerte-object-recognition-core,ros-fuerte-ecto
-Description: A technique to recognize transparent objects
+Depends: ${shlibs:Depends}, ${misc:Depends}, ros-fuerte-pcl,ros-fuerte-object-recognition-core,ros-fuerte-ecto
+Description: A technique to recognize and estimate poses of transparent objects
 
