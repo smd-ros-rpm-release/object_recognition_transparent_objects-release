@@ -50,11 +50,11 @@ namespace object_recognition_core
     // Specializations for cv::FileNode
     template<>
     void
-    object_recognition_core::db::Document::get_attachment<PoseEstimator>(const AttachmentName &attachment_name,
-                                                                    PoseEstimator &value) const
+    object_recognition_core::db::Document::get_attachment<transpod::PoseEstimator>(const AttachmentName &attachment_name,
+                                                                                   transpod::PoseEstimator &value) const
     {
       // Get the binary file
-      std::string file_name = temporary_yml_file_name(false);
+      std::string file_name = temporary_yml_file_name(true);
       std::stringstream ss;
       this->get_attachment_stream(attachment_name, ss, MIME_TYPE);
 
@@ -69,18 +69,18 @@ namespace object_recognition_core
 
     template<>
     void
-    object_recognition_core::db::Document::get_attachment_and_cache<PoseEstimator>(const AttachmentName &attachment_name,
-                                                                              PoseEstimator &value)
+    object_recognition_core::db::Document::get_attachment_and_cache<transpod::PoseEstimator>(const AttachmentName &attachment_name,
+                                                                                             transpod::PoseEstimator &value)
     {
     }
 
     template<>
     void
-    object_recognition_core::db::Document::set_attachment<PoseEstimator>(const AttachmentName &attachment_name,
-                                                                    const PoseEstimator &value)
+    object_recognition_core::db::Document::set_attachment<transpod::PoseEstimator>(const AttachmentName &attachment_name,
+                                                                                   const transpod::PoseEstimator &value)
     {
       // First write the class to a file
-      std::string file_name = temporary_yml_file_name(false);
+      std::string file_name = temporary_yml_file_name(true);
       {
         cv::FileStorage fs(file_name, cv::FileStorage::WRITE);
         value.write(fs);
