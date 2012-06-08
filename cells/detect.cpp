@@ -8,10 +8,10 @@
 #include <object_recognition_core/db/ModelReader.h>
 
 #include <edges_pose_refiner/poseEstimator.hpp>
-#include <edges_pose_refiner/glassDetector.hpp>
+#include <edges_pose_refiner/glassSegmentator.hpp>
 #include <edges_pose_refiner/utils.hpp>
 #include <edges_pose_refiner/pclProcessing.hpp>
-#include <edges_pose_refiner/transparentDetector.hpp>
+#include <edges_pose_refiner/detector.hpp>
 #include "db_transparent_objects.hpp"
 
 //#define TRANSPARENT_DEBUG
@@ -32,12 +32,12 @@ namespace transparent_objects
       std::cout << "detector: ParameterCallback" << std::endl;
       BOOST_FOREACH(const object_recognition_core::db::Document & document, db_documents)
           {
-            PoseEstimator currentPoseEstimator;
+            transpod::PoseEstimator currentPoseEstimator;
             // Load the detector for that class
-            document.get_attachment<PoseEstimator>("detector", currentPoseEstimator);
+            document.get_attachment<transpod::PoseEstimator>("detector", currentPoseEstimator);
 
             std::string object_id = document.get_value<ObjectId>("object_id");
-            detector_->addObject(object_id, currentPoseEstimator);
+            detector_->addTrainObject(object_id, currentPoseEstimator);
             printf("Loaded %s\n", object_id.c_str());
           }
     }
@@ -67,7 +67,7 @@ namespace transparent_objects
     configure(const tendrils& params, const tendrils& inputs, const tendrils& outputs)
     {
       std::cout << "detector: configure" << std::endl;
-      detector_ = new TransparentDetector;
+      detector_ = new transpod::Detector;
       std::cout << "detector: leaving configure" << std::endl;
     }
 
@@ -110,9 +110,10 @@ namespace transparent_objects
       std::vector<std::string> detectedObjects;
 
       cv::Mat registrationMask = cv::imread(*registrationMaskFilename_, CV_LOAD_IMAGE_GRAYSCALE);
+      transpod::Detector::DebugInfo debugInfo;
       try
       {
-        detector_->detect(*color_, *depth_, registrationMask, pclCloud, poses, posesQualities, detectedObjects);
+        detector_->detect(*color_, *depth_, registrationMask, pclCloud, poses, posesQualities, detectedObjects, &debugInfo);
       }
       catch(const cv::Exception &)
       {
@@ -120,9 +121,10 @@ namespace transparent_objects
 
       if (*visualize_)
       {
+        imshow("glass mask", debugInfo.glassMask);
         cv::Mat visualization = color_->clone();
         detector_->visualize(poses, detectedObjects, visualization);
-        imshow("detection", visualization);
+        imshow("all detected objects", visualization);
         cv::waitKey(300);
 #ifdef USE_3D_VISUALIZATION
         detector_->visualize(poses, detectedObjects, pclCloud);
@@ -141,6 +143,14 @@ namespace transparent_objects
         pose_result.set_T(poses[bestDetectionIndex].getTvec());
         pose_result.set_object_id(*object_db_, detectedObjects[bestDetectionIndex]);
         pose_results_->push_back(pose_result);
+        if (*visualize_)
+        {
+          cv::Mat visualization = color_->clone();
+          detector_->visualize(std::vector<PoseRT>(1, poses[bestDetectionIndex]),
+                               std::vector<std::string>(1, detectedObjects[bestDetectionIndex]), visualization);
+          imshow("the best object", visualization);
+          cv::waitKey(300);
+        }
       }
 
 //      {
@@ -170,7 +180,7 @@ namespace transparent_objects
     /** The DB parameters */
     ecto::spore<ObjectDb> object_db_;
 
-    cv::Ptr<TransparentDetector> detector_;
+    cv::Ptr<transpod::Detector> detector_;
   };
 }
 
