@@ -147,12 +147,16 @@ int main(int argc, char **argv)
 {
   std::system("date");
 
-  CV_Assert(argc == 3);
-  string baseFolder = argv[1];
-  string testObjectName = argv[2];
+  if (argc != 4)
+  {
+    cout << argv[0] << " <modelsPath> <baseFoldler> <testObjectName>" << endl;
+    return -1;
+  }
+  string modelsPath = argv[1];
+  string baseFolder = argv[2];
+  string testObjectName = argv[3];
 
   //const string modelFilename = "finalModels/" + objectName + ".xml";
-  const string modelsPath = "/media/2Tb/transparentBases/trainedModels/";
 
   const string testFolder = baseFolder + "/" + testObjectName + "/";
 
@@ -380,8 +384,6 @@ int main(int argc, char **argv)
       continue;
     }
 
-    cout << poses_cam.size() << endl;
-
     if (!posesQualities.empty())
     {
       std::vector<float>::iterator bestDetection = std::min_element(posesQualities.begin(), posesQualities.end());
@@ -453,6 +455,7 @@ int main(int argc, char **argv)
       }
 #endif
     }
+    cout << endl;
 
 #ifdef PROFILE
     return 0;

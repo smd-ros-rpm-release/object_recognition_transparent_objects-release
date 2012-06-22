@@ -126,7 +126,7 @@ struct EdgeModel
    * \param image computed mask
    * \param tl coordinates of the top-left corner of the computed mask
    */  
-  static void computePointsMask(const std::vector<cv::Point2f> &points, const cv::Size &imageSize, float downFactor, int closingIterationsCount, cv::Mat &image, cv::Point &tl);
+  static void computePointsMask(const std::vector<cv::Point2f> &points, const cv::Size &imageSize, float downFactor, int closingIterationsCount, cv::Mat &image, cv::Point &tl, bool cropMask = true);
   
   /** \brief Get a silhouette of the edge model projected on an image
    *
@@ -169,6 +169,11 @@ struct EdgeModel
    * \return the center of the object model, that is mean of all object points
    */
   cv::Point3f getObjectCenter() const;
+
+ // cv::Vec3f getBoundingBox() const;
+
+  std::vector<std::pair<float, float> > getObjectRanges() const;
+
 
   /** \brief Clear all data in the edge model */
   void clear();
