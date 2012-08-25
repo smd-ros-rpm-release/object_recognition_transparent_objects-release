@@ -162,6 +162,8 @@ EdgeModel::EdgeModel(const std::vector<cv::Point3f> &_points, const std::vector<
     outModel = centralizedModel;
   }
 
+  computeSurfaceEdgelsOrientations(outModel);
+
   *this = outModel;
 }
 
@@ -281,51 +283,125 @@ void EdgeModel::generateSilhouettes(const cv::Ptr<const PinholeCamera> &pinholeC
 #endif
 }
 
-static void computeDots(const Mat &mat1, const Mat &mat2, Mat &dst)
+static void computeDotProducts(const Mat &samples_1, const Mat &samples_2, Mat &dotProducts)
 {
-  Mat m1 = mat1.reshape(1);
-  Mat m2 = mat2.reshape(1);
-  CV_Assert(m1.size() == m2.size());
-  CV_Assert(m1.type() == m2.type());
+  Mat rowSamples_1 = samples_1.reshape(1);
+  Mat rowSamples_2 = samples_2.reshape(1);
 
-  Mat products = m1.mul(m2);
-  reduce(products, dst, 1, CV_REDUCE_SUM);
+  CV_Assert(rowSamples_1.size() == rowSamples_2.size());
+  CV_Assert(rowSamples_1.type() == rowSamples_2.type());
+
+  Mat products = rowSamples_1.mul(rowSamples_2);
+  reduce(products, dotProducts, 1, CV_REDUCE_SUM);
 }
 
-static void computeNormalDots(const Mat &Rt, const EdgeModel &rotatedEdgeModel, Mat &dots)
+static void computeCosinesWithNormals(const EdgeModel &edgeModel, const PoseRT &pose, Mat &cosines, cv::Mat *jacobian = 0)
 {
-  Mat R = Rt(Range(0, 3), Range(0, 3));
-  Mat t = Rt(Range(0, 3), Range(3, 4));
+  Mat R = pose.getRotationMatrix();
+  Mat t = pose.getTvec();
 
-  Mat vec;
-  Mat(t.t() * R).reshape(3).convertTo(vec, CV_32FC1);
-  Scalar scalar = Scalar(vec.at<Vec3f>(0));
-  Mat edgelsMat = Mat(rotatedEdgeModel.points) + scalar;
+  Mat shiftMat(t.t() * R);
+  Vec3d shiftVec(shiftMat);
+  Scalar shiftScalar(shiftVec);
+
+  Mat shiftedPoints = Mat(edgeModel.points) + shiftScalar;
 
   Mat norms;
-  computeDots(edgelsMat, edgelsMat, norms);
+  computeDotProducts(shiftedPoints, shiftedPoints, norms);
   sqrt(norms, norms);
 
-  computeDots(edgelsMat, Mat(rotatedEdgeModel.normals), dots);
+  computeDotProducts(shiftedPoints, Mat(edgeModel.normals), cosines);
   float epsf = 1e-4;
-  Scalar eps = Scalar::all(epsf);
-  dots /= (norms + epsf);
+  cosines /= (norms + epsf);
+
+  if (jacobian != 0)
+  {
+    Mat J_rodrigues;
+    Rodrigues(pose.getRvec(), R, J_rodrigues);
+    CV_Assert(J_rodrigues.rows == 3 && J_rodrigues.cols == 9);
+
+    vector<Point3d> dRtts;
+    const int dim = 3;
+    for (int axisIndex = 0; axisIndex < dim; ++axisIndex)
+    {
+      Mat dR = J_rodrigues.row(axisIndex).reshape(1, dim);
+      Mat dRttMat = dR.t() * t;
+      Vec3d dRttVec(dRttMat);
+      Point3d dRtt(dRttVec);
+      dRtts.push_back(dRtt);
+    }
+
+    vector<Point3f> dtRs;
+    for (int axisIndex = 0; axisIndex < dim; ++axisIndex)
+    {
+      Mat dtR_Mat = R.row(axisIndex);
+      Vec3d dtR_Vec(dtR_Mat);
+      Point3d dtR(dtR_Vec);
+      dtRs.push_back(dtR);
+    }
+
+    jacobian->create(edgeModel.points.size(), dim * 2, CV_64FC1);
+    CV_Assert(norms.type() == CV_32FC1);
+    CV_Assert(norms.rows == 1 || norms.cols == 1);
+    CV_Assert(cosines.type() == CV_32FC1);
+    CV_Assert(cosines.rows == 1 || cosines.cols == 1);
+    for (size_t pointIndex = 0; pointIndex < edgeModel.points.size(); ++pointIndex)
+    {
+      double currentNorm = norms.at<float>(pointIndex);
+      CV_Assert(fabs(currentNorm) > epsf);
+
+      //derivative with regard to rvec
+      for (int axisIndex = 0; axisIndex < dim; ++axisIndex)
+      {
+        Point3d dRtt = dRtts[axisIndex];
+        double firstTerm = edgeModel.normals[pointIndex].ddot(dRtt);
+        double secondTerm = cosines.at<float>(pointIndex) * edgeModel.points[pointIndex].ddot(dRtt) / currentNorm;
+        jacobian->at<double>(pointIndex, axisIndex) = (firstTerm - secondTerm) / currentNorm;
+      }
+
+      //derivative with regard to tvec
+      for (int axisIndex = 0; axisIndex < dim; ++axisIndex)
+      {
+        Point3d dtR = dtRs[axisIndex];
+        double firstTerm = edgeModel.normals[pointIndex].ddot(dtR);
+        double secondTerm = cosines.at<float>(pointIndex) * (edgeModel.points[pointIndex].ddot(dtR) + t.at<double>(axisIndex)) / currentNorm;
+        jacobian->at<double>(pointIndex, dim + axisIndex) = (firstTerm - secondTerm) / currentNorm;
+      }
+    }
+  }
 }
 
-void EdgeModel::computeWeights(const PoseRT &pose_cam, cv::Mat &weights) const
+//TODO: why derivatives with regard to rvec are zero?
+void EdgeModel::computeWeights(const PoseRT &pose_cam, double decayConstant, double maxWeight, cv::Mat &weights, cv::Mat *jacobian) const
 {
-//  EdgeModel rotatedEdgeModel;
-//  rotate_cam(pose_cam, rotatedEdgeModel);
+  Mat cosinesWithNormals, cosinesJacobian;
+  if (jacobian != 0)
+  {
+    computeCosinesWithNormals(*this, pose_cam, cosinesWithNormals, &cosinesJacobian);
+  }
+  else
+  {
+    computeCosinesWithNormals(*this, pose_cam, cosinesWithNormals);
+  }
 
-  computeNormalDots(pose_cam.getProjectiveMatrix(), *this, weights);
   Mat expWeights;
-  //TODO: move up
-  exp(-10.0 * abs(weights), expWeights);
-  weights = 2 * expWeights;
+  exp(-decayConstant * abs(cosinesWithNormals), expWeights);
+  //TODO: use square instead of abs
+//  exp(-decayConstant * cosinesWithNormals.mul(cosinesWithNormals), expWeights);
 
-  Mat doubleWeights;
-  weights.convertTo(doubleWeights, CV_64FC1);
-  weights = doubleWeights;
+  expWeights.convertTo(weights, CV_64FC1, maxWeight);
+
+  if (jacobian != 0)
+  {
+    CV_Assert(cosinesWithNormals.type() == CV_32FC1);
+    CV_Assert(cosinesWithNormals.rows == 1 || cosinesWithNormals.cols == 1);
+    for (int i = 0; i < cosinesJacobian.rows; ++i)
+    {
+      double factor = weights.at<double>(i) * (-decayConstant) * sgn(cosinesWithNormals.at<float>(i));
+      cosinesJacobian.row(i) *= factor;
+    }
+    cosinesJacobian.copyTo(*jacobian);
+  }
 }
 
 void EdgeModel::getSilhouette(const cv::Ptr<const PinholeCamera> &pinholeCamera, const PoseRT &pose_cam, Silhouette &silhouette, float downFactor, int closingIterationsCount) const
@@ -337,6 +413,14 @@ void EdgeModel::getSilhouette(const cv::Ptr<const PinholeCamera> &pinholeCamera,
 
   Mat footprintPoints;
   computeFootprint(projectedPointsVector, pinholeCamera->imageSize, footprintPoints, downFactor, closingIterationsCount);
+
+/*
+  cout << footprintPoints.rows << " x " << footprintPoints.cols << endl;
+  vector<Point2f> projectedStableEdgels;
+  pinholeCamera->projectPoints(stableEdgels, pose_cam, projectedStableEdgels);
+  cout << projectedStableEdgels.size() << endl;
+  footprintPoints.push_back(Mat(projectedStableEdgels));
+*/
 
   silhouette.init(footprintPoints, pose_cam);
 }
@@ -449,7 +533,6 @@ void EdgeModel::rotate_cam(const PoseRT &transformation_cam, EdgeModel &rotatedE
 
   project3dPoints(points, rvec, tvec, rotatedEdgeModel.points);
   project3dPoints(stableEdgels, rvec, tvec, rotatedEdgeModel.stableEdgels);
-  project3dPoints(orientations, rvec, tvec, rotatedEdgeModel.orientations);
 
   Mat Rt_cam;
   createProjectiveMatrix(rvec, tvec, Rt_cam);
@@ -465,6 +548,7 @@ void EdgeModel::rotate_cam(const PoseRT &transformation_cam, EdgeModel &rotatedE
   Mat rvec_rot, tvec_rot;
   getRvecTvec(Rt_cam, rvec_rot, tvec_rot);
   project3dPoints(normals, rvec_rot, tvec_rot, rotatedEdgeModel.normals);
+  project3dPoints(orientations, rvec_rot, tvec_rot, rotatedEdgeModel.orientations);
 }
 
 Mat EdgeModel::rotate_obj(const PoseRT &transformation_obj, EdgeModel &rotatedEdgeModel) const
@@ -744,4 +828,17 @@ void computeObjectSystem(const std::vector<cv::Point3f> &points, cv::Mat &Rt_obj
   CV_Assert(t_obj2cam.rows == 3 && t_obj2cam.cols == 1);
 
   createProjectiveMatrix(R_obj2cam, t_obj2cam, Rt_obj2cam);
+}
+
+void EdgeModel::computeSurfaceEdgelsOrientations(EdgeModel &edgeModel)
+{
+  CV_Assert(edgeModel.hasRotationSymmetry);
+  edgeModel.orientations.clear();
+
+  for (size_t i = 0; i < edgeModel.stableEdgels.size(); ++i)
+  {
+    Point3f edgel = edgeModel.stableEdgels[i];
+    Point3f tangentLine = edgel.cross(edgeModel.upStraightDirection);
+    edgeModel.orientations.push_back(tangentLine);
+  }
 }

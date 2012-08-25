@@ -42,6 +42,8 @@ struct GlassSegmentatorParams
   /** \brief Refine a segmentation mask with convexity assumption or not */
   bool fillConvex;
 
+  float minContourAreaBeforeGrabCut;
+
   GlassSegmentatorParams()
   {
     closingIterations = 12;
@@ -54,6 +56,9 @@ struct GlassSegmentatorParams
     grabCutMargin = 10;
 
     fillConvex = false;
+
+    //TODO: investigate this parameter. Can you remove this?
+    minContourAreaBeforeGrabCut = 40.0f;
   }
 };
 
@@ -68,17 +73,18 @@ public:
    * \param registrationMask A mask of invalid values in a depth map when a Kinect returns the registered depth
    * \param numberOfComponents Number of connected components in glass segmentation
    * \param glassMask Mask with computed segmentation: white is glass, black is background
-   * \param camera Pinhole camera to project 3d points on an image
-   * \param tablePlane Coefficients of the test table plane
    * \param tableHull Convex hull of the test table plane
    */
-  void segment(const cv::Mat &bgrImage, const cv::Mat &depthMat, const cv::Mat &registrationMask, int &numberOfComponents, cv::Mat &glassMask, const PinholeCamera *camera = 0, const cv::Vec4f *tablePlane = 0, const pcl::PointCloud<pcl::PointXYZ> *tableHull = 0);
+  void segment(const cv::Mat &bgrImage, const cv::Mat &depthMat, const cv::Mat &registrationMask, int &numberOfComponents,
+               cv::Mat &glassMask, const std::vector<cv::Point2f> *tableHull = 0);
 
 private:
   GlassSegmentatorParams params;
 };
 
-void showSegmentation(const cv::Mat &mask, const cv::Mat &image, const std::string &title = "glass segmentation");
+void showSegmentation(const cv::Mat &image, const cv::Mat &mask, const std::string &title = "glass segmentation");
 void refineSegmentationByGrabCut(const cv::Mat &bgrImage, const cv::Mat &rawMask, cv::Mat &refinedMask, const GlassSegmentatorParams &params = GlassSegmentatorParams());
+
+void segmentGlassManually(const cv::Mat &image, cv::Mat &glassMask);
 
 #endif

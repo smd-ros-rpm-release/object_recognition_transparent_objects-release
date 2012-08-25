@@ -2,6 +2,12 @@
 #include "edges_pose_refiner/detector.hpp"
 #include "edges_pose_refiner/TODBaseImporter.hpp"
 
+//#define USE_INITIAL_GUESS
+
+#ifdef USE_INITIAL_GUESS
+#include "edges_pose_refiner/pclProcessing.hpp"
+#endif
+
 using namespace cv;
 using namespace transpod;
 using std::cout;
@@ -15,7 +21,11 @@ int main(int argc, char *argv[])
   RNG &rng = theRNG();
   rng.state = 0xffffffff;
 
-  CV_Assert(argc == 3);
+  if (argc != 3)
+  {
+    cout << argv[0] << " <baseFolder> <testObjectName>" << endl;
+    return -1;
+  }
   string baseFolder = argv[1];
   string testObjectName = argv[2];
 
@@ -46,8 +56,16 @@ int main(int argc, char *argv[])
   params.glassSegmentationParams.closingIterations = 12;
   params.glassSegmentationParams.finalClosingIterations = 32;
   params.glassSegmentationParams.grabCutErosionsIterations = 4;
+  params.planeSegmentationMethod = FIDUCIALS;
 
   TODBaseImporter dataImporter(testFolder);
+
+  Mat kinectDepth, kinectBgrImage;
+  dataImporter.importBGRImage(imageFilename, kinectBgrImage);
+  dataImporter.importDepth(depthFilename, kinectDepth);
+  imshow("rgb image", kinectBgrImage);
+  imshow("depth", kinectDepth);
+  waitKey(500);
 
   PinholeCamera kinectCamera;
   dataImporter.readCameraParams(kinectCameraFilename, kinectCamera, false);
@@ -70,9 +88,6 @@ int main(int argc, char *argv[])
   Mat registrationMask = imread(registrationMaskFilename, CV_LOAD_IMAGE_GRAYSCALE);
   CV_Assert(!registrationMask.empty());
 
-  Mat kinectDepth, kinectBgrImage;
-  dataImporter.importBGRImage(imageFilename, kinectBgrImage);
-  dataImporter.importDepth(depthFilename, kinectDepth);
 
   pcl::PointCloud<pcl::PointXYZ> testPointCloud;
   dataImporter.importPointCloud(pointCloudFilename, testPointCloud);
@@ -91,6 +106,39 @@ int main(int argc, char *argv[])
   catch(const cv::Exception &)
   {
   }
+
+#ifdef USE_INITIAL_GUESS
+  {
+    PoseRT initialPose;
+    //3
+    initialPose.rvec = (Mat_<double>(3, 1) << -0.8356714356174999, 0.08672943393358865, 0.1875608929524414);
+    initialPose.tvec = (Mat_<double>(3, 1) << -0.0308572565967134, 0.1872369696442459, 0.8105566363422957);
+
+    poses_cam.push_back(initialPose);
+    //TODO: move up
+    posesQualities.push_back(1.0f);
+
+    GlassSegmentator glassSegmentator(params.glassSegmentationParams);
+    Mat glassMask;
+    int numberOfComponents;
+    glassSegmentator.segment(kinectBgrImage, kinectDepth, registrationMask, numberOfComponents, glassMask);
+    showSegmentation(kinectBgrImage, glassMask);
+
+    transpod::PoseEstimator poseEstimator(kinectCamera);
+    poseEstimator.setModel(edgeModels[0]);
+
+    Vec4f tablePlane;
+    computeTableOrientationByFiducials(kinectCamera, kinectBgrImage, tablePlane);
+    poseEstimator.refinePosesBySupportPlane(kinectBgrImage, glassMask, tablePlane, poses_cam, posesQualities);
+
+    Mat finalVisualization = kinectBgrImage.clone();
+    poseEstimator.visualize(poses_cam[0], finalVisualization);
+
+    imshow("estimated poses", finalVisualization);
+    waitKey();
+  }
+#endif
+
   recognitionTime.stop();
   cout << "Recognition time: " << recognitionTime.getTimeSec() << "s" << endl;
 
@@ -111,13 +159,13 @@ int main(int argc, char *argv[])
   {
     std::vector<float>::iterator bestDetection = std::min_element(posesQualities.begin(), posesQualities.end());
     int bestDetectionIndex = std::distance(posesQualities.begin(), bestDetection);
-    int detectedObjectIndex = detector.getTrainObjectIndex(detectedObjectsNames[bestDetectionIndex]);
     cout << "Recognized object: " << detectedObjectsNames[bestDetectionIndex] << endl;
 
     Mat detectionResults = kinectBgrImage.clone();
     vector<PoseRT> bestPose(1, poses_cam[bestDetectionIndex]);
     vector<string> bestName(1, detectedObjectsNames[bestDetectionIndex]);
-    detector.visualize(bestPose, bestName, detectionResults);
+//    detector.visualize(bestPose, bestName, detectionResults);
+    detector.visualize(poses_cam, detectedObjectsNames, detectionResults);
     imshow("detection", detectionResults);
     imwrite("detection_" + bestName[0] + ".png", detectionResults);
     imwrite("testImage_" + bestName[0] + ".png", kinectBgrImage);

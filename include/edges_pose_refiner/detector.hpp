@@ -13,7 +13,7 @@
 
 namespace transpod
 {
-  struct PlaneSegmentationParams
+  struct PCLPlaneSegmentationParams
   {
     /** \brief leaf size of the voxel grid used to downsample a test point cloud */
     float downLeafSize;
@@ -36,7 +36,7 @@ namespace transpod
      */
     cv::Point3f verticalDirection;
 
-    PlaneSegmentationParams()
+    PCLPlaneSegmentationParams()
     {
       downLeafSize = 0.002f;
       kSearch = 10;
@@ -46,17 +46,25 @@ namespace transpod
     }
   };
 
+  enum PlaneSegmentationMethod {PCL, RGBD, FIDUCIALS};
+  enum GlassSegmentationMethod {AUTOMATIC, MANUAL};
+
   struct DetectorParams
   {
+    PlaneSegmentationMethod planeSegmentationMethod;
     /** \brief parameters to segment a plane in a test scene */
-    PlaneSegmentationParams planeSegmentationParams;
+    PCLPlaneSegmentationParams pclPlaneSegmentationParams;
 
+    GlassSegmentationMethod glassSegmentationMethod;
     /** \brief parameters to segment glass */
     GlassSegmentatorParams glassSegmentationParams;
 
+
     DetectorParams()
     {
-      planeSegmentationParams = PlaneSegmentationParams();
+      planeSegmentationMethod = PCL;
+      pclPlaneSegmentationParams = PCLPlaneSegmentationParams();
+      glassSegmentationMethod = AUTOMATIC;
       glassSegmentationParams = GlassSegmentatorParams();
     }
   };
@@ -154,9 +162,6 @@ namespace transpod
     void visualize(const std::vector<PoseRT> &poses, const std::vector<std::string> &objectNames,
                    pcl::PointCloud<pcl::PointXYZ> &cloud) const;
   private:
-    bool tmpComputeTableOrientation(const PinholeCamera &camera, const cv::Mat &centralBgrImage,
-                                    cv::Vec4f &tablePlane) const;
-
     DetectorParams params;
     PinholeCamera srcCamera;
     std::map<std::string, PoseEstimator> poseEstimators;
@@ -167,6 +172,7 @@ namespace transpod
   {
       cv::Mat glassMask;
       std::vector<cv::Mat> initialSilhouettes;
+      std::vector<PoseRT> initialPoses;
       cv::Vec4f tablePlane;
   };
 

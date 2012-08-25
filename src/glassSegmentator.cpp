@@ -35,8 +35,15 @@ void refineSegmentationByGrabCut(const Mat &bgrImage, const Mat &rawMask, Mat &r
 #ifdef VISUALIZE
   Mat commonMask(rawMask.size(), CV_8UC1, Scalar(4));
 #endif
+  //TODO: move up
+  const float minArea = 40.0f;
   for(size_t i = 0; i < contours.size(); ++i)
   {
+    if (contourArea(contours[i]) < minArea)
+    {
+      continue;
+    }
+
     Rect roi = boundingRect(Mat(contours[i]));
     roi.x = std::max(0, roi.x - params.grabCutMargin);
     roi.y = std::max(0, roi.y - params.grabCutMargin);
@@ -154,7 +161,7 @@ void showGrabCutResults(const Mat &mask, const string &title)
   imshow(title, result);
 }
 
-void showSegmentation(const Mat &mask, const Mat &image, const string &title)
+void showSegmentation(const Mat &image, const Mat &mask, const string &title)
 {
   Mat drawImage = drawSegmentation(image, mask);
   imshow(title, drawImage);
@@ -175,13 +182,8 @@ GlassSegmentator::GlassSegmentator(const GlassSegmentatorParams &_params)
   params = _params;
 }
 
-void refineGlassMaskByTableOrientation(const PinholeCamera &camera, const cv::Vec4f &tablePlane, const pcl::PointCloud<pcl::PointXYZ> &pclTableHull, cv::Mat &glassMask)
+void refineGlassMaskByTableHull(const std::vector<cv::Point2f> &tableHull, cv::Mat &glassMask)
 {
-  vector<Point3f> tableHull;
-  pcl2cv(pclTableHull, tableHull);
-  vector<Point2f> projectedHull;
-  camera.projectPoints(tableHull, PoseRT(), projectedHull);
-
 #ifdef VISUALIZE_TABLE
   Mat visualizedGlassMask;
   cvtColor(glassMask, visualizedGlassMask, CV_GRAY2BGR);
@@ -200,23 +202,24 @@ void refineGlassMaskByTableOrientation(const PinholeCamera &camera, const cv::Ve
   {
     Moments moms = moments(contours[i]);
     Point2f centroid(moms.m10 / moms.m00, moms.m01 / moms.m00);
-    if (pointPolygonTest(projectedHull, centroid, false) < 0)
+    if (pointPolygonTest(tableHull, centroid, false) < 0)
     {
       drawContours(glassMask, contours, i, Scalar(0, 0, 0), -1);
     }
   }
 }
 
-void GlassSegmentator::segment(const cv::Mat &bgrImage, const cv::Mat &depthMat, const cv::Mat &registrationMask, int &numberOfComponents, cv::Mat &glassMask, const PinholeCamera *camera, const cv::Vec4f *tablePlane, const pcl::PointCloud<pcl::PointXYZ> *tableHull)
+void GlassSegmentator::segment(const cv::Mat &bgrImage, const cv::Mat &depthMat, const cv::Mat &registrationMask, int &numberOfComponents,
+                               cv::Mat &glassMask, const std::vector<cv::Point2f> *tableHull)
 {
   Mat srcMask = getInvalidDepthMask(depthMat, registrationMask);
 #ifdef VISUALIZE
   imshow("mask without registration errors", srcMask);
 #endif
 
-  if (camera != 0 && tablePlane != 0 && tableHull != 0)
+  if (tableHull != 0)
   {
-    refineGlassMaskByTableOrientation(*camera, *tablePlane, *tableHull, srcMask);
+    refineGlassMaskByTableHull(*tableHull, srcMask);
   }
 
 #ifdef VISUALIZE
@@ -300,3 +303,53 @@ void GlassSegmentator::segment(const cv::Mat &bgrImage, const cv::Mat &depthMat,
 #endif
 }
 
+struct ManualGlassSegmentationData
+{
+  bool isLButtonPressed;
+  std::vector<cv::Point> glassContour;
+  cv::Mat displayedImage;
+  std::string windowName;
+};
+
+static void onMouse(int event, int x, int y, int, void *srcData)
+{
+  ManualGlassSegmentationData *data = static_cast<ManualGlassSegmentationData*>(srcData);
+  if (event == CV_EVENT_LBUTTONUP)
+  {
+    data->isLButtonPressed = false;
+  }
+
+  if (event == CV_EVENT_LBUTTONDOWN)
+  {
+    data->isLButtonPressed = true;
+  }
+
+  if (!data->isLButtonPressed)
+  {
+    return;
+  }
+
+  Point pt(x, y);
+  data->glassContour.push_back(pt);
+  circle(data->displayedImage, pt, 1, Scalar(255, 0, 0), -1);
+  imshow(data->windowName, data->displayedImage);
+}
+
+void segmentGlassManually(const cv::Mat &image, cv::Mat &glassMask)
+{
+  ManualGlassSegmentationData data;
+  //TODO: what if button is pressed already?
+  data.isLButtonPressed = false;
+  data.displayedImage = image.clone();
+  data.windowName = "manual glass segmentation";
+
+  namedWindow(data.windowName);
+  setMouseCallback(data.windowName, onMouse, &data);
+  imshow(data.windowName, data.displayedImage);
+  waitKey();
+  destroyWindow(data.windowName);
+
+  vector<vector<Point> > contours(1, data.glassContour);
+  glassMask = Mat(image.size(), CV_8UC1, Scalar(0));
+  drawContours(glassMask, contours, -1, Scalar::all(255), -1);
+}

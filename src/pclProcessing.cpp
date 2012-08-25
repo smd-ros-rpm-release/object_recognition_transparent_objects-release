@@ -39,6 +39,9 @@
 #include <pcl/visualization/cloud_viewer.h>
 #endif
 
+#include "edges_pose_refiner/utils.hpp"
+#include <opencv2/rgbd/rgbd.hpp>
+
 using namespace cv;
 
 using std::cout;
@@ -151,7 +154,8 @@ void rotateTable(const pcl::ModelCoefficients::Ptr &coefficients, pcl::PointClou
   coefficients->values[2] = 1;
 }
 
-bool computeTableOrientation(float downLeafSize, int kSearch, float distanceThreshold, const pcl::PointCloud<pcl::PointXYZ> &fullSceneCloud, cv::Vec4f &tablePlane, pcl::PointCloud<pcl::PointXYZ> *tableHull, float clusterTolerance, cv::Point3f verticalDirection)
+bool computeTableOrientation(float downLeafSize, int kSearch, float distanceThreshold, const pcl::PointCloud<pcl::PointXYZ> &fullSceneCloud,
+                             cv::Vec4f &tablePlane, const PinholeCamera *camera, std::vector<cv::Point2f> *tableHull, float clusterTolerance, cv::Point3f verticalDirection)
 {
 #ifdef VERBOSE
   cout << "Estimating table plane...  " << std::flush;
@@ -190,7 +194,7 @@ bool computeTableOrientation(float downLeafSize, int kSearch, float distanceThre
     tablePlane[i] = coefficients->values[i];
   }
 
-  if (tableHull != 0)
+  if (camera != 0 && tableHull != 0)
   {
     pcl::PointCloud<pcl::PointXYZ> projectedInliers;
     projectInliersOnTable(sceneCloud, inliers, coefficients, projectedInliers);
@@ -220,7 +224,12 @@ bool computeTableOrientation(float downLeafSize, int kSearch, float distanceThre
     pcl::PointCloud<pcl::PointXYZ> table;
     extractPointCloud(projectedInliers, boost::make_shared<pcl::PointIndices>(clusterIndices[maxClusterIndex]), table);
 
-    reconstructConvexHull(table, *tableHull);
+    pcl::PointCloud<pcl::PointXYZ> tableHull3D;
+    reconstructConvexHull(table, tableHull3D);
+
+    vector<Point3f> cvTableHull3D;
+    pcl2cv(tableHull3D, cvTableHull3D);
+    camera->projectPoints(cvTableHull3D, PoseRT(), *tableHull);
   }
 #ifdef VERBOSE
   cout << "Done." << endl;
@@ -244,6 +253,172 @@ bool computeTableOrientation(float downLeafSize, int kSearch, float distanceThre
   {
   }
 #endif
+
+  return true;
+}
+
+bool computeTableOrientationByRGBD(const Mat &depth, const PinholeCamera &camera,
+                                   cv::Vec4f &tablePlane, std::vector<cv::Point> *tableHull,
+                                   Point3f verticalDirection)
+{
+  CV_Assert(false);
+  //TODO: fix compilation with Jenkins
+#if 0
+  Mat points3d;
+  depthTo3d(depth, camera.cameraMatrix, points3d);
+  RgbdNormals normalsEstimator(depth.rows, depth.cols, depth.depth(), camera.cameraMatrix);
+  Mat normals = normalsEstimator(points3d);
+
+  RgbdPlane planeEstimator;
+  Mat planesMask;
+  vector<Vec4f> planeCoefficients;
+  planeEstimator(points3d, normals, planesMask, planeCoefficients);
+  CV_Assert(planesMask.type() == CV_8UC1);
+
+  vector<int> pixelCounts(planeCoefficients.size(), 0);
+  for (int i = 0; i < planesMask.rows; ++i)
+  {
+    for (int j = 0; j < planesMask.cols; ++j)
+    {
+      pixelCounts[planesMask.at<uchar>(i, j)] += 1;
+    }
+  }
+  std::vector<int>::iterator largestPlaneIt = std::max_element(pixelCounts.begin(), pixelCounts.end());
+  int largestPlaneIndex = std::distance(pixelCounts.begin(), largestPlaneIt);
+
+  tablePlane = planeCoefficients[largestPlaneIndex];
+
+  Point3f tableNormal(tablePlane[0],
+                      tablePlane[1],
+                      tablePlane[2]);
+  if (tableNormal.dot(verticalDirection) < 0)
+  {
+    tablePlane *= -1;
+  }
+
+
+  if (tableHull != 0)
+  {
+    vector<Point> tablePoints;
+    for (int i = 0; i < planesMask.rows; ++i)
+    {
+      for (int j = 0; j < planesMask.cols; ++j)
+      {
+        if (planesMask.at<uchar>(i, j) == largestPlaneIndex)
+        {
+          tablePoints.push_back(Point(j, i));
+        }
+      }
+    }
+    convexHull(tablePoints, *tableHull);
+  }
+
+  return true;
+#endif
+}
+
+
+bool computeTableOrientationByFiducials(const PinholeCamera &camera, const cv::Mat &centralBgrImage, Vec4f &tablePlane)
+{
+  Mat blackBlobsObject, whiteBlobsObject, allBlobsObject;
+  //TODO: move up parameters
+  const string fiducialFilename = "/media/2Tb/transparentBases/fiducial.yml";
+//  const string fiducialFilename = "/u/ilysenkov/transparentBases/base/fiducial.yml";
+  readFiducial(fiducialFilename, blackBlobsObject, whiteBlobsObject, allBlobsObject);
+
+  SimpleBlobDetector::Params params;
+  params.filterByInertia = true;
+  params.minArea = 10;
+  params.minDistBetweenBlobs = 5;
+
+  params.blobColor = 0;
+  Ptr<FeatureDetector> blackBlobDetector = new SimpleBlobDetector(params);
+
+  params.blobColor = 255;
+  Ptr<FeatureDetector> whiteBlobDetector = new SimpleBlobDetector(params);
+
+  const Size boardSize(4, 11);
+
+  Mat blackBlobs, whiteBlobs;
+  bool isBlackFound = findCirclesGrid(centralBgrImage, boardSize, blackBlobs, CALIB_CB_ASYMMETRIC_GRID | CALIB_CB_CLUSTERING, blackBlobDetector);
+  bool isWhiteFound = findCirclesGrid(centralBgrImage, boardSize, whiteBlobs, CALIB_CB_ASYMMETRIC_GRID | CALIB_CB_CLUSTERING, whiteBlobDetector);
+  if (!isBlackFound && !isWhiteFound)
+  {
+    cout << isBlackFound << " " << isWhiteFound << endl;
+    imshow("can't estimate", centralBgrImage);
+    waitKey();
+    return false;
+  }
+
+  Mat rvec, tvec;
+  Mat allBlobs = blackBlobs.clone();
+  allBlobs.push_back(whiteBlobs);
+
+  Mat blobs, blobsObject;
+  if (isBlackFound && isWhiteFound)
+  {
+    blobs = allBlobs;
+    blobsObject = allBlobsObject;
+  }
+  else
+  {
+    if (isBlackFound)
+    {
+      blobs = blackBlobs;
+      blobsObject = blackBlobsObject;
+    }
+    if (isWhiteFound)
+    {
+      blobs = whiteBlobs;
+      blobsObject = whiteBlobsObject;
+    }
+  }
+
+  solvePnP(blobsObject, blobs, camera.cameraMatrix, camera.distCoeffs, rvec, tvec);
+
+  PoseRT pose_cam(rvec, tvec);
+
+  Point3d tableAnchor;
+  transformPoint(pose_cam.getProjectiveMatrix(), Point3d(0.0, 0.0, 0.0), tableAnchor);
+
+/*
+  if (pt_pub != 0)
+  {
+    vector<Point3f> points;
+
+    vector<Point3f> objectPoints = blackBlobsObject;
+
+    for (size_t i = 0; i < objectPoints.size(); ++i)
+    {
+      Point3d pt;
+      transformPoint(pose_cam.getProjectiveMatrix(), objectPoints[i], pt);
+      points.push_back(pt);
+      tableAnchor = pt;
+    }
+    objectPoints = whiteBlobsObject;
+    for (size_t i = 0; i < objectPoints.size(); ++i)
+    {
+      Point3d pt;
+      transformPoint(pose_cam.getProjectiveMatrix(), objectPoints[i], pt);
+      points.push_back(pt);
+    }
+
+
+    publishPoints(points, *pt_pub, 234, Scalar(255, 0, 255));
+  }
+*/
+
+
+  pose_cam.tvec = Mat::zeros(3, 1, CV_64FC1);
+  Point3d tableNormal;
+  transformPoint(pose_cam.getProjectiveMatrix(), Point3d(0.0, 0.0, -1.0), tableNormal);
+
+  const int dim = 3;
+  for (int i = 0; i < dim; ++i)
+  {
+    tablePlane[i] = Vec3d(tableNormal)[i];
+  }
+  tablePlane[dim] = -tableNormal.ddot(tableAnchor);
 
   return true;
 }

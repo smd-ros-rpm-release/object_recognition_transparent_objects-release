@@ -23,6 +23,10 @@
 //#define VISUALIZE_INITIAL_POSE_REFINEMENT
 //#define VISUALIZE_GEOMETRIC_HASHING
 
+//#define VISUALIZE_FINAL_REFINEMENT
+
+//#define VERBOSE
+
 using namespace cv;
 using std::cout;
 using std::endl;
@@ -79,10 +83,12 @@ namespace transpod
     //TODO: make key distribution in the table more uniform
   }
 
-  void PoseEstimator::estimatePose(const cv::Mat &kinectBgrImage, const cv::Mat &glassMask, std::vector<PoseRT> &poses_cam, std::vector<float> &posesQualities, const cv::Vec4f *tablePlane, std::vector<cv::Mat> *initialSilhouettes) const
+  void PoseEstimator::estimatePose(const cv::Mat &kinectBgrImage, const cv::Mat &glassMask, std::vector<PoseRT> &poses_cam, std::vector<float> &posesQualities, const cv::Vec4f *tablePlane,
+                                   std::vector<cv::Mat> *initialSilhouettes, std::vector<PoseRT> *initialPoses) const
   {
     CV_Assert(kinectBgrImage.size() == glassMask.size());
     CV_Assert(kinectBgrImage.size() == getValidTestImageSize());
+    testBgrImage = kinectBgrImage;
 
     if (silhouettes.empty())
     {
@@ -90,18 +96,28 @@ namespace transpod
       return;
     }
 
-    Mat testEdges, silhouetteEdges;
-    computeCentralEdges(kinectBgrImage, glassMask, testEdges, silhouetteEdges);
-
   //  getInitialPoses(glassMask, poses_cam, posesQualities);
     getInitialPosesByGeometricHashing(glassMask, poses_cam, posesQualities, initialSilhouettes);
+    if (initialPoses != 0)
+    {
+      *initialPoses = poses_cam;
+    }
 
   //  refineInitialPoses(kinectBgrImage, glassMask, poses_cam, posesQualities);
     if (tablePlane != 0)
     {
-      refinePosesByTableOrientation(*tablePlane, testEdges, silhouetteEdges, poses_cam, posesQualities);
-      refineFinalTablePoses(*tablePlane, testEdges, silhouetteEdges, poses_cam, posesQualities);
+      refinePosesBySupportPlane(kinectBgrImage, glassMask, *tablePlane, poses_cam, posesQualities);
     }
+  }
+
+  void PoseEstimator::refinePosesBySupportPlane(const cv::Mat &bgrImage, const cv::Mat &glassMask, const cv::Vec4f &tablePlane,
+                                                std::vector<PoseRT> &poses_cam, std::vector<float> &posesQualities) const
+  {
+    testBgrImage = bgrImage;
+    Mat testEdges, silhouetteEdges;
+    computeCentralEdges(bgrImage, glassMask, testEdges, silhouetteEdges);
+    refinePosesByTableOrientation(tablePlane, testEdges, silhouetteEdges, poses_cam, posesQualities);
+    refineFinalTablePoses(tablePlane, testEdges, silhouetteEdges, poses_cam, posesQualities);
   }
 
   void PoseEstimator::refineFinalTablePoses(const cv::Vec4f &tablePlane,
@@ -117,12 +133,21 @@ namespace transpod
     }
 
     posesQualities.resize(poses_cam.size());
-    LocalPoseRefiner localPoseRefiner(edgeModel, testEdges, kinectCamera.cameraMatrix, kinectCamera.distCoeffs, kinectCamera.extrinsics.getProjectiveMatrix(), params.lmFinalParams);
+    LocalPoseRefiner localPoseRefiner(edgeModel, testBgrImage, testEdges, kinectCamera, params.lmFinalParams);
     localPoseRefiner.setSilhouetteEdges(silhouetteEdges);
     for (size_t initPoseIdx = 0; initPoseIdx < poses_cam.size(); ++initPoseIdx)
     {
       PoseRT &initialPose_cam = poses_cam[initPoseIdx];
+#ifdef VISUALIZE_FINAL_REFINEMENT
+      showEdgels(testEdges, edgeModel.points, initialPose_cam, kinectCamera, "before final refinement");
+      showEdgels(testEdges, edgeModel.stableEdgels, initialPose_cam, kinectCamera, "stable before final refinement");
+#endif
       posesQualities[initPoseIdx] = localPoseRefiner.refineUsingSilhouette(initialPose_cam, true, tablePlane);
+#ifdef VISUALIZE_FINAL_REFINEMENT
+      showEdgels(testEdges, edgeModel.points, initialPose_cam, kinectCamera, "after final refinement");
+      showEdgels(testEdges, edgeModel.stableEdgels, initialPose_cam, kinectCamera, "stable after final refinement");
+      waitKey();
+#endif
     }
   }
 
@@ -149,6 +174,7 @@ namespace transpod
     for (size_t initPoseIdx = 0; initPoseIdx < poses_cam.size(); ++initPoseIdx)
     {
   #ifdef VISUALIZE_INITIAL_POSE_REFINEMENT
+      cout << "quality[" << initPoseIdx << "]: " << initPosesQualities[initPoseIdx] << endl;
       showEdgels(centralEdges, edgeModel.points, poses_cam[initPoseIdx], kinectCamera, "before alignment to a table plane");
   #endif
 
@@ -163,7 +189,7 @@ namespace transpod
 
     LocalPoseRefinerParams lmErrorParams = params.lmInitialParams;
     lmErrorParams.termCriteria = params.lmErrorCriteria;
-    LocalPoseRefiner localPoseRefiner(edgeModel, centralEdges, kinectCamera.cameraMatrix, kinectCamera.distCoeffs, kinectCamera.extrinsics.getProjectiveMatrix(), lmErrorParams);
+    LocalPoseRefiner localPoseRefiner(edgeModel, testBgrImage, centralEdges, kinectCamera, lmErrorParams);
     localPoseRefiner.setSilhouetteEdges(silhouetteEdges);
     for (size_t initPoseIdx = 0; initPoseIdx < poses_cam.size(); ++initPoseIdx)
     {
@@ -201,6 +227,7 @@ namespace transpod
       showEdgels(centralEdges, edgeModel.points, initialPose_cam, kinectCamera, "central pose refined by LM with a table plane");
       showEdgels(centralEdges, edgeModel.stableEdgels, initialPose_cam, kinectCamera, "stable edgels refined by LM with a table plane");
       cout << "quality[" << initPoseIdx << "]: " << initPosesQualities[initPoseIdx] << endl;
+      cout << "pose[" << initPoseIdx << "]: " << initialPose_cam << endl;
       waitKey();
   #endif
     }
@@ -336,7 +363,7 @@ namespace transpod
   #ifdef VISUALIZE_INITIAL_POSE_REFINEMENT
     imshow("central edges even after", centralEdges);
     imshow("silhouette edges", silhouetteEdges);
-    //waitKey();
+    waitKey();
   #endif
 
   }
@@ -488,7 +515,8 @@ namespace transpod
         BasisMatch match;
         match.confidence = currentVotes.at<float>(maxLoc.y, maxLoc.x);
 
-        if (currentScale.at<float>(maxLoc.y, maxLoc.x) < params.minScale)
+        if (currentScale.at<float>(maxLoc.y, maxLoc.x) < params.minScale ||
+            currentScale.at<float>(maxLoc.y, maxLoc.x) > params.maxScale)
         {
           continue;
         }
@@ -546,6 +574,7 @@ namespace transpod
         }
 
         double rotationDistance, translationDistance;
+        //TODO: use rotation symmetry
         //TODO: check symmetry of the distance
         PoseRT::computeDistance(poses_cam[i], poses_cam[j], rotationDistance, translationDistance, edgeModel.Rt_obj2cam);
 
@@ -944,7 +973,7 @@ namespace transpod
       jacobians->resize(initPoses_cam.size());
     }
 
-    LocalPoseRefiner localPoseRefiner(edgeModel, centralEdges, kinectCamera.cameraMatrix, kinectCamera.distCoeffs, kinectCamera.extrinsics.getProjectiveMatrix(), lmParams);
+    LocalPoseRefiner localPoseRefiner(edgeModel, testBgrImage, centralEdges, kinectCamera, lmParams);
     localPoseRefiner.setSilhouetteEdges(silhouetteEdges);
     for (size_t initPoseIdx = 0; initPoseIdx < initPoses_cam.size(); ++initPoseIdx)
     {

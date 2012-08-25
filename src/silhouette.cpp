@@ -90,7 +90,7 @@ void Silhouette::generateHashForBasis(int firstIndex, int secondIndex, cv::Mat &
 
   const Vec2f firstPoint(-0.5f, 0.0f);
   const Vec2f secondPoint(0.5f, 0.0f);
-  const float eps = 1e-4;
+  const float eps = 1e-3;
   CV_Assert(norm(transformedEdgels.at<Vec2f>(firstIndex) - firstPoint) < eps);
   CV_Assert(norm(transformedEdgels.at<Vec2f>(secondIndex) - secondPoint) < eps);
 
@@ -293,13 +293,14 @@ void Silhouette::visualizeSimilarityTransformation(const cv::Mat &similarityTran
   drawPoints(transformedEdgelsVec, image, color);
 }
 
-void Silhouette::draw(cv::Mat &image, int thickness) const
+void Silhouette::draw(cv::Mat &image, cv::Scalar color, int thickness) const
 {
-//  CV_Assert(image.type() == CV_8UC1);
-  vector<Point2f> edgelsVec = edgels;
-  drawPoints(edgelsVec, image, Scalar::all(255), thickness);
+  Mat edgelsInt;
+  edgels.convertTo(edgelsInt, CV_32SC2);
+  vector<vector<Point> > contours(1);
+  contours[0] = edgelsInt;
+  drawContours(image, contours, -1, color, thickness);
 }
-
 
 void Silhouette::getNormalizationTransform(const cv::Mat &points, cv::Mat &normalizationTransform)
 {

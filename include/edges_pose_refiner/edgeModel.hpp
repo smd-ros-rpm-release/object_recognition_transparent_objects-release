@@ -115,7 +115,7 @@ struct EdgeModel
    */
   static void computeFootprint(const std::vector<cv::Point2f> &points, const cv::Size &imageSize, cv::Mat &footprintPoints, float downFactor, int closingIterationsCount);
 
-  void computeWeights(const PoseRT &pose_cam, cv::Mat &weights) const;
+  void computeWeights(const PoseRT &pose_cam, double decayConstant, double maxWeight, cv::Mat &weights, cv::Mat *jacobian = 0) const;
 
   //TODO: remove imageSize from parameters
   /** \brief Compute a mask (that is a filled footprint) of a point set
@@ -205,12 +205,14 @@ struct EdgeModel
    */
   void read(const cv::FileNode &fn);
 
+  //TODO: move to private
+  void rotateToCanonicalPose(const PinholeCamera &camera, PoseRT &model2canonicalPose, float distance = 1.0f);
+  static void computeSurfaceEdgelsOrientations(EdgeModel &edgeModel);
 private:
   EdgeModelCreationParams params;
 
   static bool isAxisCorrect(const std::vector<cv::Point3f> &points, cv::Point3f rotationAxis, int neighborIndex, float distanceFactor, int rotationCount);
   //TODO: remove the default parameter
-  void rotateToCanonicalPose(const PinholeCamera &camera, PoseRT &model2canonicalPose, float distance = 1.0f);
   static void projectPointsOnAxis(const EdgeModel &edgeModel, cv::Point3d axis, std::vector<float> &projections, cv::Point3d &center_d);
   static void setTableAnchor(EdgeModel &edgeModel, float belowTableRatio);
   static void setStableEdgels(EdgeModel &edgeModel, float stableEdgelsRatio);
