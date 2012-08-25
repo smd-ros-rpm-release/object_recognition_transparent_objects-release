@@ -22,9 +22,15 @@ double PoseError::getTranslationDifference() const
   return translationDiff;
 }
 
-double PoseError::getRotationDifference() const
+double PoseError::getRotationDifference(bool useRadians) const
 {
-  return rotationDifference;
+  const double rad2deg = 180.0 / CV_PI;
+  return (useRadians ? rotationDifference : rotationDifference * rad2deg);
+}
+
+double PoseError::getDifference() const
+{
+  return totalDiff;
 }
 
 std::ostream& operator<<(std::ostream& output, const PoseError& poseError)
@@ -42,7 +48,9 @@ PoseError::PoseError()
 void PoseError::init(const PoseRT &_posesDifference, double _rotationDifference, double _translationDifference)
 {
   posesDifference = _posesDifference;
-  rotationDifference = std::min(_rotationDifference, CV_PI - _rotationDifference);
+  //TODO: was it a bug?
+//  rotationDifference = std::min(_rotationDifference, CV_PI - _rotationDifference);
+  rotationDifference = std::min(_rotationDifference, 2 * CV_PI - _rotationDifference);
   CV_Assert(rotationDifference >= 0);
   translationDiff = _translationDifference;
   computeSingleCriteria();
@@ -56,11 +64,12 @@ bool PoseError::operator<(const PoseError &error) const
 void PoseError::computeSingleCriteria()
 {
   const double rad2deg = 180.0 / CV_PI;
-  const double cm2deg = 30.0;
+//  const double cm2deg = 30.0;
+  const double deg2cm = 1.0 / 30.0;
   const double meter2cm = 100.0;
 
   double rotationDiffInDegs = rad2deg * rotationDifference;
-  totalDiff = meter2cm * cm2deg * translationDiff  + rotationDiffInDegs;
+  totalDiff = meter2cm * translationDiff  + deg2cm * rotationDiffInDegs;
 }
 
 PoseError PoseError::operator+(const PoseError &poseError) const

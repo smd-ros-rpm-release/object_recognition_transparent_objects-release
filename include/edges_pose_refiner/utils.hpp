@@ -108,4 +108,11 @@ cv::Mat getFromCache(const std::string &name);
 
 cv::Mat getInvalidDepthMask(const cv::Mat &depthMat, const cv::Mat &registrationMask);
 
+void computeOrientations(const cv::Mat &edges, cv::Mat &orientationsImage);
+
+template <typename T> int sgn(T val)
+{
+  return (T(0) < val) - (val < T(0));
+}
+
 #endif /* UTILS_HPP_ */

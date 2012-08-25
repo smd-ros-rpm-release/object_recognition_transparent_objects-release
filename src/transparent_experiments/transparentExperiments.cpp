@@ -31,7 +31,6 @@ using std::stringstream;
 //#define VISUALIZE_POSE_REFINEMENT
 //#define WRITE_ERRORS
 //#define PROFILE
-//#define WRITE_GLASS_SEGMENTATION
 
 
 #if defined(VISUALIZE_POSE_REFINEMENT) && defined(USE_3D_VISUALIZATION)
@@ -143,6 +142,72 @@ void writeImages(const vector<Mat> &images, const string &path, int testIdx, int
   imwrite(name.str(), commonImage);
 }
 
+float computeOcclusionPercentage(const PinholeCamera &camera,
+                                 const EdgeModel &testObject, const PoseRT &objectOffset,
+                                 const std::vector<EdgeModel> &occlusionObjects, const std::vector<PoseRT> &occlusionOffsets,
+                                 const PoseRT &model2test_fiducials)
+{
+  //TODO: move up
+  const float downFactor = 1.0f;
+  const int closingIterationsCount = 7;
+  const int objectColor = 127;
+  const int occlusionColor = 255;
+
+  PoseRT objectPose = model2test_fiducials * objectOffset;
+  Silhouette objectSilhouette;
+  Ptr<PinholeCamera> cameraPtr = new PinholeCamera(camera);
+  testObject.getSilhouette(cameraPtr, objectPose, objectSilhouette, downFactor, closingIterationsCount);
+
+  Mat image(camera.imageSize, CV_8UC1, Scalar(0));
+  objectSilhouette.draw(image, Scalar(objectColor), 0);
+
+  for (size_t i = 0; i < occlusionObjects.size(); ++i)
+  {
+    PoseRT pose_cam = model2test_fiducials * occlusionOffsets[i];
+    Silhouette silhouette;
+    occlusionObjects[i].getSilhouette(cameraPtr, pose_cam, silhouette, downFactor, closingIterationsCount);
+    silhouette.draw(image, Scalar(occlusionColor), -1);
+  }
+
+//  imshow("occlusions", image);
+//  waitKey(200);
+
+  Mat edgels;
+  objectSilhouette.getEdgels(edgels);
+  vector<Point2f> contour = edgels;
+
+  bool isOccluded = true;
+  int firstUnoccludedIndex = 0;
+  double unoccludedLength = 0.0;
+  for (int i = 0; i < edgels.rows; ++i)
+  {
+    Point pt = contour[i];
+    if (image.at<uchar>(pt) == objectColor && isOccluded)
+    {
+      firstUnoccludedIndex = i;
+      isOccluded = false;
+    }
+
+    if (image.at<uchar>(pt) == occlusionColor && !isOccluded)
+    {
+      isOccluded = true;
+
+      unoccludedLength += arcLength(edgels.rowRange(firstUnoccludedIndex, i), false);
+    }
+  }
+  if (!isOccluded)
+  {
+    bool isClosed = (firstUnoccludedIndex == 0);
+    unoccludedLength += arcLength(edgels.rowRange(firstUnoccludedIndex, edgels.rows), isClosed);
+  }
+
+  double contourLength = arcLength(edgels, true);
+
+  const float eps = 1e-2;
+  CV_Assert(contourLength > eps);
+  return 1.0 - (unoccludedLength / contourLength);
+}
+
 int main(int argc, char **argv)
 {
   std::system("date");
@@ -163,7 +228,7 @@ int main(int argc, char **argv)
 //  const string camerasListFilename = baseFolder + "/cameras.txt";
   const string kinectCameraFilename = baseFolder + "/center.yml";
 //  const string visualizationPath = "visualized_results/";
-//  const string errorsVisualizationPath = "/home/ilysenkov/errors/";
+  const string errorsVisualizationPath = "/home/ilysenkov/errors/";
 //  const vector<string> objectNames = {"bank", "bucket"};
 //  const vector<string> objectNames = {"bank", "bottle", "bucket", "glass", "wineglass"};
   const string registrationMaskFilename = baseFolder + "/registrationMask.png";
@@ -187,7 +252,12 @@ int main(int argc, char **argv)
     dataImporter.importEdgeModel(modelsPath, objectNames[i], edgeModels[i]);
     cout << "All points in the model: " << edgeModels[i].points.size() << endl;
     cout << "Surface points in the model: " << edgeModels[i].stableEdgels.size() << endl;
+    EdgeModel::computeSurfaceEdgelsOrientations(edgeModels[i]);
   }
+
+  vector<EdgeModel> occlusionObjects;
+  vector<PoseRT> occlusionOffsets;
+  dataImporter.importOcclusionObjects(modelsPath, occlusionObjects, occlusionOffsets);
 
 
 //#ifdef VISUALIZE_POSE_REFINEMENT
@@ -198,14 +268,16 @@ int main(int argc, char **argv)
 //  params.glassSegmentationParams.closingIterations = 8;
 // bucket
 //  params.glassSegmentationParams.openingIterations = 8;
-  //fixedOnTable
-  //params.glassSegmentationParams.finalClosingIterations = 8;
 
   //good clutter
   params.glassSegmentationParams.openingIterations = 15;
   params.glassSegmentationParams.closingIterations = 12;
   params.glassSegmentationParams.finalClosingIterations = 32;
   params.glassSegmentationParams.grabCutErosionsIterations = 4;
+  params.planeSegmentationMethod = FIDUCIALS;
+
+  //fixedOnTable
+  //params.glassSegmentationParams.finalClosingIterations = 8;
 
   //clutter
   //bucket
@@ -225,7 +297,7 @@ int main(int argc, char **argv)
   CV_Assert(!registrationMask.empty());
 
   vector<size_t> initialPoseCount;
-  vector<PoseError> bestPoses;
+  vector<PoseError> bestPoses, bestInitialPoses;
   int segmentationFailuresCount = 0;
   int badSegmentationCount = 0;
 
@@ -252,7 +324,6 @@ int main(int argc, char **argv)
       dataImporter.importDepth(testImageIdx, kinectDepth);
     }
 
-
 /*
     Mat silhouetteImage(480, 640, CV_8UC1, Scalar(0));
     silhouettes[0].draw(silhouetteImage);
@@ -269,12 +340,20 @@ int main(int argc, char **argv)
     exit(-1);
 */
 
-    PoseRT model2test_ground;
-    dataImporter.importGroundTruth(testImageIdx, model2test_ground);
+    PoseRT model2test_fiducials, objectOffset;
+    dataImporter.importGroundTruth(testImageIdx, model2test_fiducials, false, &objectOffset);
+    PoseRT model2test_ground = model2test_fiducials * objectOffset;
 //    cout << "Ground truth: " << model2test_ground << endl;
 
+    CV_Assert(edgeModels.size() == 1);
+    float occlusionPercentage = computeOcclusionPercentage(kinectCamera, edgeModels[0], objectOffset, occlusionObjects, occlusionOffsets, model2test_fiducials);
+    CV_Assert(0.0 <= occlusionPercentage && occlusionPercentage <= 1.0);
+    cout << "occlusion percentage: " << occlusionPercentage << endl;
+
     pcl::PointCloud<pcl::PointXYZ> testPointCloud;
+#ifdef USE_3D_VISUALIZATION
     dataImporter.importPointCloud(testImageIdx, testPointCloud);
+#endif
 
 #ifdef VISUALIZE_TEST_DATA
     imshow("rgb", kinectBgrImage);
@@ -339,6 +418,7 @@ int main(int argc, char **argv)
     waitKey();
 #endif
 
+#ifndef PROFILE
 
     if (edgeModels.size() == 1)
     {
@@ -398,6 +478,28 @@ int main(int argc, char **argv)
 
     if (objectNames.size() == 1)
     {
+      cout << "initial poses: " << debugInfo.initialPoses.size() << endl;
+      vector<PoseError> initialPoseErrors;
+      for (size_t i = 0 ; i < debugInfo.initialPoses.size(); ++i)
+      {
+        PoseError poseError;
+        evaluatePoseWithRotation(edgeModels[0], debugInfo.initialPoses[i], model2test_ground, poseError);
+        cout << poseError << endl;
+        initialPoseErrors.push_back(poseError);
+//        showEdgels(kinectBgrImage, edgeModels[0].points, debugInfo.initialPoses[i], kinectCamera, "gh pose");
+//        waitKey();
+      }
+      cout << "the end." << endl;
+      PoseError currentBestInitialError;
+      {
+        vector<PoseError>::iterator bestPoseIt = std::min_element(initialPoseErrors.begin(), initialPoseErrors.end());
+        int bestPoseIdx = std::distance(initialPoseErrors.begin(), bestPoseIt);
+        currentBestInitialError = initialPoseErrors[bestPoseIdx];
+        cout << "Best initial error: " << currentBestInitialError << endl;
+        bestInitialPoses.push_back(currentBestInitialError);
+      }
+
+
       CV_Assert(poses_cam.size() == 1);
       int objectIndex = 0;
       initialPoseCount.push_back(poses_cam.size());
@@ -433,8 +535,13 @@ int main(int argc, char **argv)
       }
       vector<PoseError>::iterator bestPoseIt = std::min_element(currentPoseErrors.begin(), currentPoseErrors.end());
       int bestPoseIdx = std::distance(currentPoseErrors.begin(), bestPoseIt);
-      cout << "Best pose: " << currentPoseErrors[bestPoseIdx] << endl;
-      bestPoses.push_back(currentPoseErrors[bestPoseIdx]);
+      PoseError currentBestError = currentPoseErrors[bestPoseIdx];
+      cout << "Best pose: " << currentBestError << endl;
+      bestPoses.push_back(currentBestError);
+
+      cout << "Result: " << occlusionPercentage << ", " << debugInfo.initialPoses.size() << ", " <<
+              currentBestInitialError.getTranslationDifference() << ", " << currentBestInitialError.getRotationDifference(false) << ", " <<
+              currentBestError.getTranslationDifference() << ", " << currentBestError.getRotationDifference(false) << endl;
 
 #ifdef WRITE_ERRORS
       const float maxTrans = 0.02;
@@ -455,6 +562,7 @@ int main(int argc, char **argv)
       }
 #endif
     }
+#endif
     cout << endl;
 
 #ifdef PROFILE
@@ -488,10 +596,15 @@ int main(int argc, char **argv)
     meanInitialPoseCount /= initialPoseCount.size();
     cout << "mean initial pose count: " << meanInitialPoseCount << endl;
 
+    //TODO: move up
     const double cmThreshold = 2.0;
 
 //    const double cmThreshold = 5.0;
     PoseError::evaluateErrors(bestPoses, cmThreshold);
+
+    cout << "initial poses:" << endl;
+    //TODO: move up
+    PoseError::evaluateErrors(bestInitialPoses, 3.0 * cmThreshold);
   }
 
   cout << "Evaluation of geometric hashing" << endl;
