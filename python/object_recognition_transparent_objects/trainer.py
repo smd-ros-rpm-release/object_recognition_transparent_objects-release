@@ -39,7 +39,7 @@ class TransparentObjectsProcessor(ecto.BlackBox):
         return [ self.dealer[:] >> self.trainer[:] ]
        
 
-class TransparentObjectsTrainingPipeline(TrainerBase):
+class TransparentObjectsTrainingPipeline(TrainingPipeline):
     '''Implements the training pipeline functions'''
     @classmethod
     def type_name(cls):
