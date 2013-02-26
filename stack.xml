@@ -16,7 +16,6 @@
   <build_depends>openni-dev</build_depends>
   <build_depends>opencv2</build_depends>
   <build_depends>pcl</build_depends>
-  <build_depends>roscpp</build_depends>
 
   <depends>ecto</depends>
   <depends>ecto_opencv</depends>
@@ -24,5 +23,4 @@
   <depends>openni-dev</depends>
   <depends>opencv2</depends>
   <depends>pcl</depends>
-  <depends>roscpp</depends>
 </stack>
