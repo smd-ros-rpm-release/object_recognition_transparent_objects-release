@@ -25,23 +25,22 @@ using ecto::tendrils;
 using ecto::spore;
 using object_recognition_core::db::ObjectId;
 using object_recognition_core::common::PoseResult;
-using object_recognition_core::db::ObjectDb;
+using object_recognition_core::db::ObjectDbPtr;
 
 namespace transparent_objects
 {
-  struct TransparentObjectsDetector: public object_recognition_core::db::bases::ModelReaderImpl
+  struct TransparentObjectsDetector: public object_recognition_core::db::bases::ModelReaderBase
   {
     void
-    ParameterCallback(const object_recognition_core::db::Documents & db_documents)
+    parameter_callback(const object_recognition_core::db::Documents & db_documents)
     {
-      std::cout << "detector: ParameterCallback" << std::endl;
       BOOST_FOREACH(const object_recognition_core::db::Document & document, db_documents)
           {
             transpod::PoseEstimator currentPoseEstimator;
             // Load the detector for that class
             document.get_attachment<transpod::PoseEstimator>("detector", currentPoseEstimator);
 
-            std::string object_id = document.get_value<ObjectId>("object_id");
+            std::string object_id = document.get_field<ObjectId>("object_id");
             detector_->addTrainObject(object_id, currentPoseEstimator);
             printf("Loaded %s\n", object_id.c_str());
           }
@@ -50,7 +49,7 @@ namespace transparent_objects
     static void
     declare_params(tendrils& params)
     {
-      std::cout << "detector: declare_params" << std::endl;
+      object_recognition_core::db::bases::declare_params_impl(params, "TransparentObjects");
       params.declare(&TransparentObjectsDetector::registrationMaskFilename_, "registrationMaskFilename", "The filename of the registration mask.");
       params.declare(&TransparentObjectsDetector::visualize_, "visualize", "Visualize results", false);
       params.declare(&TransparentObjectsDetector::object_db_, "object_db", "The DB parameters").required(true);
@@ -71,15 +70,13 @@ namespace transparent_objects
     void
     configure(const tendrils& params, const tendrils& inputs, const tendrils& outputs)
     {
-      std::cout << "detector: configure" << std::endl;
+      configure_impl();
       detector_ = new transpod::Detector;
-      std::cout << "detector: leaving configure" << std::endl;
     }
 
     int
     process(const tendrils& inputs, const tendrils& outputs)
     {
-      std::cout << "detector: process" << std::endl;
 #ifdef TRANSPARENT_DEBUG
       cv::FileStorage fs("input.xml", cv::FileStorage::READ);
       if (fs.isOpened())
@@ -103,11 +100,6 @@ namespace transparent_objects
       fs.release();
 #endif
 
-      assert(cloud_->channels() == 3);
-      std::vector<cv::Point3f> cvCloud = cloud_->reshape(3, cloud_->total());
-      pcl::PointCloud<pcl::PointXYZ> pclCloud;
-      cv2pcl(cvCloud, pclCloud);
-
       std::vector<PoseRT> poses;
       PinholeCamera camera(*K_, cv::Mat(), PoseRT(), color_->size());
       detector_->initialize(camera);
@@ -118,7 +110,7 @@ namespace transparent_objects
       transpod::Detector::DebugInfo debugInfo;
       try
       {
-        detector_->detect(*color_, *depth_, registrationMask, pclCloud, poses, posesQualities, detectedObjects, &debugInfo);
+        detector_->detect(*color_, *depth_, registrationMask, poses, posesQualities, detectedObjects, &debugInfo);
       }
       catch(const cv::Exception &)
       {
@@ -132,7 +124,8 @@ namespace transparent_objects
         imshow("all detected objects", visualization);
         cv::waitKey(300);
 #ifdef USE_3D_VISUALIZATION
-        detector_->visualize(poses, detectedObjects, pclCloud);
+        CV_Assert(false);
+        //detector_->visualize(poses, detectedObjects, pclCloud);
 #endif
       }
 
@@ -236,7 +229,7 @@ namespace transparent_objects
     /** The object recognition results */
     ecto::spore<std::vector<PoseResult> > pose_results_;
     /** The DB parameters */
-    ecto::spore<ObjectDb> object_db_;
+    ecto::spore<ObjectDbPtr> object_db_;
 
     cv::Ptr<transpod::Detector> detector_;
 
@@ -247,5 +240,5 @@ namespace transparent_objects
   };
 }
 
-ECTO_CELL(transparent_objects_cells, object_recognition_core::db::bases::ModelReaderBase<transparent_objects::TransparentObjectsDetector>, "Detector",
-  "Detection of transparent objects.");
+ECTO_CELL(transparent_objects_cells, transparent_objects::TransparentObjectsDetector, "Detector",
+          "Detection of transparent objects.");
