@@ -39,7 +39,7 @@ class TransparentObjectsProcessor(ecto.BlackBox):
         return [ self.dealer[:] >> self.trainer[:] ]
        
 
-class TransparentObjectsTrainingPipeline(TrainingPipeline):
+class TransparentObjectsTrainingPipeline(TrainerBase):
     '''Implements the training pipeline functions'''
     @classmethod
     def type_name(cls):
@@ -49,8 +49,7 @@ class TransparentObjectsTrainingPipeline(TrainingPipeline):
     def processor(cls, *args, **kwargs):
         object_db = kwargs['object_db']
         object_id = kwargs.get('object_id', None)
-        subtype = kwargs['subtype']
-    
+
         # db_models = Models(db_params, [ object_id ], method, subtype)
         if object_id:
             # TODO these should be loaded from the database?
