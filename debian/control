@@ -1,0 +1,12 @@
+Source: ros-groovy-object-recognition-transparent-objects
+Section: misc
+Priority: extra
+Maintainer: Ilya Lysenkov <ilya.lysenkov@itseez.com>
+Build-Depends: debhelper (>= 7.0.0), libopenni-dev, ros-groovy-catkin, ros-groovy-ecto, ros-groovy-object-recognition-core, ros-groovy-pcl-ros
+Homepage: http://wg-perception.github.io/transparent_objects
+Standards-Version: 3.9.2
+
+Package: ros-groovy-object-recognition-transparent-objects
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, libopenni-dev, ros-groovy-ecto, ros-groovy-ecto-opencv, ros-groovy-object-recognition-core, ros-groovy-pcl-ros
+Description: A technique to recognize and estimate poses of transparent objects
