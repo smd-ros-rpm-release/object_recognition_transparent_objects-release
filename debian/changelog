@@ -1,7 +1,0 @@
-ros-groovy-object-recognition-transparent-objects (0.3.18-0precise) precise; urgency=high
-
-  * fix dependencies with PCL
-
- -- Ilya Lysenkov <ilya.lysenkov@itseez.com>  Wed, 28 Aug 2013 19:27:21 +0000
-
-
